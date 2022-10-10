@@ -43,7 +43,9 @@ type Settings struct {
 	StartTime time.Time
 	// MachineID 机器 ID 获取方法，如果为 nil，那么默认取 private IP 后 16 位
 	MachineID func() (uint16, error)
-	// CheckMachineID 检查 ID 的合法性
+	// CheckMachineID 检查 ID 的合法性，默认为 nil
+	// CheckMachineID 方法通常可以配合 MachineID 一起使用，先 MachineID 去中心化服务上获取 ID（例如 Redis 集群，或者本地生产），
+	// 然后利用 CheckMachineID 去中心化的服务中检查此输入的 uint16 是否是真的唯一
 	CheckMachineID func(uint16) bool
 }
 
@@ -102,6 +104,11 @@ func (sf *Sonyflake) NextID() (uint64, error) {
 		sf.elapsedTime = current
 		sf.sequence = 0
 	} else { // sf.elapsedTime >= current
+		// 下面的逻辑意味着：
+		// 1. 如果时间没有回拨，也就是当前时刻下 256 个 ID 分配完了，那么就等待一个时间单位 10ms，然后下一个时刻 sf.elapsedTim+1 开始从 sequence = 0 开始继续递增分配
+		// 2. 如果时间回拨了，那么会在这个大于回拨时间的 sf.elapsedTime 继续分配（不是在回拨时间 current 时刻下）这个 256 个 ID
+		// 在这个过程中，如果 ID 被分配完了，那么就 sleep 到 sf.elapsedTime+1 时刻，然后继续从 0 开始分配 sequence
+		// 如果 ID 没有分配完，但是时间又恢复正常，即解决了时间回拨问题，那么就会按照正常逻辑，sf.elapsedTime = current，然后继续从 0 开始分配 sequence
 		sf.sequence = (sf.sequence + 1) & maskSequence
 		// sf.sequence == 0 有两种情况
 		// 情况1：sf.elapsedTime == current && sf.sequence == 0，说明此 sf.elapsedTime 时刻的 256 个序号被消耗完毕了，因此等待一个时间单位（sf.elapsedTime++）
